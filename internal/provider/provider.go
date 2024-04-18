@@ -253,6 +253,7 @@ func (p *ValsOperatorProvider) Configure(ctx context.Context, req provider.Confi
 func (p *ValsOperatorProvider) Resources(ctx context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewValsSecretResource,
+		NewDbSecretResource,
 	}
 }
 
