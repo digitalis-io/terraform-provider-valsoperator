@@ -1,4 +1,3 @@
-# Example of a ValsSecret that reads a user and password from HashiCorp Vault
 resource "valsoperator_valssecret" "example" {
   name      = "example"
   namespace = "default"

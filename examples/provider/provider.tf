@@ -5,3 +5,9 @@ terraform {
     }
   }
 }
+
+provider "valsoperator" {
+  config_paths = [
+    "~/.kube/config"
+  ]
+}

@@ -473,15 +473,28 @@ func initializeConfiguration(ctx context.Context, d ValsOperatorProviderModel) (
 		overrides.AuthInfo.Token = v
 	}
 
-	// if v := d.Exec[0].Command.ValueString(); v != "" {
-	// 	// exec := &clientcmdapi.ExecConfig{
-	// 	// 	Command: d.Exec[0].Command.ValueString(),
-	// 	// 	Args:    d.Exec[0].Args,
-	// 	// }
+	// FIXME: why do I need more than one Exec?
+	for _, ex := range d.Exec {
+		var args []string
+		for _, arg := range ex.Args {
+			args = append(args, arg.ValueString())
+		}
+		var envs []clientcmdapi.ExecEnvVar
+		for k, v := range ex.Env {
+			envs = append(envs, clientcmdapi.ExecEnvVar{Name: k, Value: v.ValueString()})
+		}
 
-	// 	// overrides.AuthInfo.Exec = exec
-	// 	fmt.Println("TODO")
-	// }
+		exec := &clientcmdapi.ExecConfig{
+			Command:         ex.Command.ValueString(),
+			InteractiveMode: clientcmdapi.IfAvailableExecInteractiveMode,
+			APIVersion:      ex.APIVersion.ValueString(),
+			Args:            args,
+			Env:             envs,
+		}
+
+		overrides.AuthInfo.Exec = exec
+	}
+
 	if v := d.ProxyURL.ValueString(); v != "" {
 		overrides.ClusterDefaults.ProxyURL = v
 	}

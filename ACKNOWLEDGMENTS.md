@@ -1,4 +1,4 @@
-# Acknoledgements
+# Acknowledgements
 
 This plugin uses some code from the following sources:
 
