@@ -1,5 +1,18 @@
-// Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+/*
+Copyright 2024 Digitalis.IO.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 
 package provider
 
@@ -11,75 +24,10 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	k8sschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
 )
-
-// DataSource defines a secret
-type DataSource struct {
-	// Ref value to the secret in the format ref+backend://path
-	// https://github.com/helmfile/vals
-	Ref string `json:"ref"`
-	// Encoding type for the secret. Only base64 supported. Optional
-	Encoding string `json:"encoding,omitempty"`
-}
-
-// DatabaseLoginCredentials holds the access details for the DB
-type DatabaseLoginCredentials struct {
-	// Name of the secret containing the credentials to be able to log in to the database
-	SecretName string `json:"secretName"`
-	// Optional namespace of the secret, default current namespace
-	Namespace string `json:"namespace,omitempty"`
-	// Key in the secret containing the database username
-	UsernameKey string `json:"usernameKey,omitempty"`
-	// Key in the secret containing the database username
-	PasswordKey string `json:"passwordKey"`
-}
-
-// Database defines a DB connection
-type Database struct {
-	// Defines the database type
-	Driver string `json:"driver"`
-	// Credentials to access the database
-	LoginCredentials DatabaseLoginCredentials `json:"loginCredentials,omitempty"`
-	// Database port number
-	Port int `json:"port,omitempty"`
-	// Key in the secret containing the database username
-	UsernameKey string `json:"usernameKey,omitempty"`
-	// Key in the secret containing the database username
-	PasswordKey string `json:"passwordKey"`
-	// Used for MySQL only, the host part for the username
-	UserHost string `json:"userHost,omitempty"`
-	// List of hosts to connect to, they'll be tried in sequence until one succeeds
-	Hosts []string `json:"hosts"`
-}
-
-// ValsSecretSpec defines the desired state of ValsSecret
-type ValsSecretSpec struct {
-	Name      string                `json:"name,omitempty"`
-	Data      map[string]DataSource `json:"data"`
-	TTL       int64                 `json:"ttl,omitempty"`
-	Type      string                `json:"type,omitempty"`
-	Databases []Database            `json:"databases,omitempty"`
-	Template  map[string]string     `json:"template,omitempty"`
-}
-
-// ValsSecretStatus defines the observed state of ValsSecret
-type ValsSecretStatus struct {
-}
-
-// ValsSecret is the Schema for the valssecrets API
-type ValsSecret struct {
-	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
-
-	Spec   ValsSecretSpec   `json:"spec,omitempty"`
-	Status ValsSecretStatus `json:"status,omitempty"`
-}
 
 // Ensure provider defined types fully satisfy framework interfaces.
 var _ datasource.DataSource = &ValsSecretDataSource{}
@@ -104,7 +52,7 @@ type TfDataSource struct {
 
 // TfTemplate is a copy of DataSource using the Tf data types
 type TfTemplateSource struct {
-	Key   types.String `tfsdk:"key"`
+	Name  types.String `tfsdk:"name"`
 	Value types.String `tfsdk:"value"`
 }
 
@@ -137,11 +85,11 @@ func (d *ValsSecretDataSource) Schema(ctx context.Context, req datasource.Schema
 				Required:            true,
 			},
 			"ttl": schema.Int64Attribute{
-				MarkdownDescription: "Vals secret ttl",
+				MarkdownDescription: "Vals secret ttl (default is 3600 seconds)",
 				Optional:            true,
 			},
 			"data": schema.ListNestedAttribute{
-				MarkdownDescription: "Secret data",
+				MarkdownDescription: "Secret data objects",
 				Computed:            true,
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
@@ -236,7 +184,7 @@ func (d *ValsSecretDataSource) Read(ctx context.Context, req datasource.ReadRequ
 		return
 	}
 
-	s, err := d.getValsSecret(ctx, data.Name.ValueString(), data.Namespace.ValueString())
+	s, err := GetValsSecret(ctx, d.dynamicClient, data.Name.ValueString(), data.Namespace.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unexpected Data Source Read Secret",
@@ -267,7 +215,7 @@ func (d *ValsSecretDataSource) Read(ctx context.Context, req datasource.ReadRequ
 
 	for k, v := range s.Spec.Template {
 		entry := TfTemplateSource{
-			Key:   types.StringValue(k),
+			Name:  types.StringValue(k),
 			Value: types.StringValue(v),
 		}
 		data.Template = append(data.Template, entry)
@@ -275,27 +223,4 @@ func (d *ValsSecretDataSource) Read(ctx context.Context, req datasource.ReadRequ
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-}
-
-func (p *ValsSecretDataSource) getValsSecret(ctx context.Context, secretName string, namespace string) (*ValsSecret, error) {
-	var secret *ValsSecret
-
-	// Define the GVR (Group-Version-Resource) for the custom resource
-	gvr := k8sschema.GroupVersionResource{
-		Group:    "digitalis.io",
-		Version:  "v1",
-		Resource: "valssecrets",
-	}
-
-	obj, err := p.dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, secretName, metav1.GetOptions{})
-	if err != nil {
-		return secret, err
-	}
-
-	err = runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), &secret)
-	if err != nil {
-		return secret, err
-	}
-
-	return secret, nil
 }
