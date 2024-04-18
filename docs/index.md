@@ -42,7 +42,6 @@ provider "valsoperator" {
 - `config_path` (String) Path to the kube config file. Can be set with KUBE_CONFIG_PATH.
 - `config_paths` (List of String) A list of paths to kube config files. Can be set with KUBE_CONFIG_PATHS environment variable.
 - `exec` (Block List) (see [below for nested schema](#nestedblock--exec))
-- `experiments` (Block List) Enable and disable experimental features. (see [below for nested schema](#nestedblock--experiments))
 - `host` (String) The hostname (in form of URI) of Kubernetes master.
 - `ignore_annotations` (List of String) List of Kubernetes metadata annotations to ignore across all resources handled by this provider for situations where external systems are managing certain resource annotations. Each item is a regular expression.
 - `ignore_labels` (List of String) List of Kubernetes metadata labels to ignore across all resources handled by this provider for situations where external systems are managing certain resource labels. Each item is a regular expression.
@@ -65,11 +64,3 @@ Optional:
 
 - `args` (List of String)
 - `env` (Map of String)
-
-
-<a id="nestedblock--experiments"></a>
-### Nested Schema for `experiments`
-
-Optional:
-
-- `manifest_resource` (Boolean) Enable the `kubernetes_manifest` resource.

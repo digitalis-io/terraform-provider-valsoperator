@@ -87,10 +87,6 @@ type ValsOperatorProviderModel struct {
 		Env        map[string]types.String `tfsdk:"env"`
 		Args       []types.String          `tfsdk:"args"`
 	} `tfsdk:"exec"`
-
-	Experiments []struct {
-		ManifestResource types.Bool `tfsdk:"manifest_resource"`
-	} `tfsdk:"experiments"`
 }
 
 func (p *ValsOperatorProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -189,17 +185,6 @@ func (p *ValsOperatorProvider) Schema(ctx context.Context, req provider.SchemaRe
 						},
 						"args": schema.ListAttribute{
 							ElementType: types.StringType,
-							Optional:    true,
-						},
-					},
-				},
-			},
-			"experiments": schema.ListNestedBlock{
-				Description: "Enable and disable experimental features.",
-				NestedObject: schema.NestedBlockObject{
-					Attributes: map[string]schema.Attribute{
-						"manifest_resource": schema.BoolAttribute{
-							Description: "Enable the `kubernetes_manifest` resource.",
 							Optional:    true,
 						},
 					},
