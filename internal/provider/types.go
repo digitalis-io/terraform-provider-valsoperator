@@ -81,3 +81,46 @@ type ValsSecret struct {
 	Spec   ValsSecretSpec   `json:"spec,omitempty"`
 	Status ValsSecretStatus `json:"status,omitempty"`
 }
+
+type DbSecretSpec struct {
+	// Name can override the secret name, defaults to manifests.name
+	SecretName string            `json:"secretName,omitempty"`
+	Vault      DbVaultConfig     `json:"vault"`
+	Template   map[string]string `json:"template,omitempty"`
+	Renew      bool              `json:"renew,omitempty"`
+	Rollout    []DbRolloutTarget `json:"rollout,omitempty"`
+}
+
+type DbRolloutTarget struct {
+	// Kind is either Deployment, Pod or StatefulSet
+	Kind string `json:"kind"`
+	// Name is the object name
+	Name string `json:"name"`
+}
+
+type DbVaultConfig struct {
+	// Role is the vault role used to connect to the database
+	Role string `json:"role"`
+	// Mount is the vault database
+	Mount string `json:"mount"`
+}
+
+type DbSecretRollout struct {
+	// Kind if the object kind such as Deployment
+	Kind string `json:"kind"`
+	// Name is the object name
+	Name string `json:"name"`
+}
+
+// DbSecret is the Schema for the dbsecrets API
+type DbSecret struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   DbSecretSpec   `json:"spec,omitempty"`
+	Status DbSecretStatus `json:"status,omitempty"`
+}
+
+// DbSecretStatus defines the observed state of DbSecret
+type DbSecretStatus struct {
+}
