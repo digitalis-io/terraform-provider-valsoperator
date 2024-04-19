@@ -25,6 +25,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"k8s.io/client-go/dynamic"
@@ -109,6 +111,9 @@ func (r *DbSecretResource) Schema(ctx context.Context, req resource.SchemaReques
 			"name": schema.StringAttribute{
 				MarkdownDescription: "Vals db secret name",
 				Required:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"renew": schema.BoolAttribute{
 				MarkdownDescription: "Whether to renew or reissue the credentials",
@@ -119,6 +124,9 @@ func (r *DbSecretResource) Schema(ctx context.Context, req resource.SchemaReques
 			"namespace": schema.StringAttribute{
 				MarkdownDescription: "Vals db secret namespace",
 				Required:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"vault_role": schema.StringAttribute{
 				MarkdownDescription: "Vaule role name with permission to issue credentials",
