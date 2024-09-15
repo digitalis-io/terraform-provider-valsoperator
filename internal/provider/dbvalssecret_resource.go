@@ -24,9 +24,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
@@ -36,66 +35,53 @@ import (
 )
 
 // Ensure provider defined types fully satisfy framework interfaces.
-var _ resource.Resource = &ValsSecretResource{}
-var _ resource.ResourceWithImportState = &ValsSecretResource{}
+var _ resource.Resource = &DbSecretResource{}
+var _ resource.ResourceWithImportState = &DbSecretResource{}
 
-func NewValsSecretResource() resource.Resource {
-	return &ValsSecretResource{}
+func NewDbSecretResource() resource.Resource {
+	return &DbSecretResource{}
 }
 
-// ValsSecretResource defines the resource implementation.
-type ValsSecretResource struct {
+// DbSecretResource defines the resource implementation.
+type DbSecretResource struct {
 	client        *kubernetes.Clientset
 	cfg           *restclient.Config
 	dynamicClient dynamic.Interface
 }
 
-type ValsSecretReference struct {
-	Name     string `tfsdk:"name"`
-	Ref      string `tfsdk:"ref"`
-	Encoding string `tfsdk:"encoding"`
+type TfDbRolloutTarget struct {
+	// Kind is either Deployment or StatefulSet
+	Kind string `tfsdk:"kind"`
+	// Name is the object name
+	Name string `tfsdk:"name"`
 }
 
-type ValsSecretTemplate struct {
+type DbSecretTemplate struct {
 	Name  string `tfsdk:"name"`
 	Value string `tfsdk:"value"`
 }
 
-// ValsSecretResourceModel describes the resource data model.
-type ValsSecretResourceModel struct {
-	Name      types.String          `tfsdk:"name"`
-	Namespace types.String          `tfsdk:"namespace"`
-	SecretRef []ValsSecretReference `tfsdk:"secret_ref"`
-	Template  []ValsSecretTemplate  `tfsdk:"template"`
-	Type      types.String          `tfsdk:"type"`
-	Ttl       types.Int64           `tfsdk:"ttl"`
+// DbSecretResourceModel describes the resource data model.
+type DbSecretResourceModel struct {
+	Name       types.String        `tfsdk:"name"`
+	Namespace  types.String        `tfsdk:"namespace"`
+	VaultRole  types.String        `tfsdk:"vault_role"`
+	VaultMount types.String        `tfsdk:"vault_mount"`
+	Template   []DbSecretTemplate  `tfsdk:"template"`
+	Renew      types.Bool          `tfsdk:"renew"`
+	Rollout    []TfDbRolloutTarget `tfsdk:"rollout"`
 }
 
-func (r *ValsSecretResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_valssecret"
+func (r *DbSecretResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_dbsecret"
 }
 
-func (r *ValsSecretResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *DbSecretResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		// This description is used by the documentation generator and the language server.
 		MarkdownDescription: "Vals Operator secret data source",
 
 		Blocks: map[string]schema.Block{
-			"secret_ref": schema.ListNestedBlock{
-				NestedObject: schema.NestedBlockObject{
-					Attributes: map[string]schema.Attribute{
-						"name": schema.StringAttribute{
-							Required: true,
-						},
-						"ref": schema.StringAttribute{
-							Required: true,
-						},
-						"encoding": schema.StringAttribute{
-							Optional: true,
-						},
-					},
-				},
-			},
 			"template": schema.ListNestedBlock{
 				NestedObject: schema.NestedBlockObject{
 					Attributes: map[string]schema.Attribute{
@@ -108,39 +94,53 @@ func (r *ValsSecretResource) Schema(ctx context.Context, req resource.SchemaRequ
 					},
 				},
 			},
+			"rollout": schema.ListNestedBlock{
+				NestedObject: schema.NestedBlockObject{
+					Attributes: map[string]schema.Attribute{
+						"name": schema.StringAttribute{
+							Required: true,
+						},
+						"kind": schema.StringAttribute{
+							Required: true,
+						},
+					},
+				},
+			},
 		},
 		Attributes: map[string]schema.Attribute{
 			"name": schema.StringAttribute{
-				MarkdownDescription: "Vals secret name",
+				MarkdownDescription: "Vals db secret name",
 				Required:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
+			},
+			"renew": schema.BoolAttribute{
+				MarkdownDescription: "Whether to renew or reissue the credentials",
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(true),
 			},
 			"namespace": schema.StringAttribute{
-				MarkdownDescription: "Vals secret namespace",
+				MarkdownDescription: "Vals db secret namespace",
 				Required:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
-			"ttl": schema.Int64Attribute{
-				MarkdownDescription: "Vals secret ttl",
-				Optional:            true,
-				Default:             int64default.StaticInt64(3600),
-				Computed:            true,
+			"vault_role": schema.StringAttribute{
+				MarkdownDescription: "Vaule role name with permission to issue credentials",
+				Required:            true,
 			},
-			"type": schema.StringAttribute{
-				MarkdownDescription: "Secret data type (default Opaque)",
-				Optional:            true,
-				Computed:            true,
-				Default:             stringdefault.StaticString("Opaque"),
+			"vault_mount": schema.StringAttribute{
+				MarkdownDescription: "Path to the secrets engine providing the credentials",
+				Required:            true,
 			},
 		},
 	}
 }
 
-func (r *ValsSecretResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *DbSecretResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	// Prevent panic if the provider has not been configured.
 	if req.ProviderData == nil {
 		return
@@ -182,8 +182,8 @@ func (r *ValsSecretResource) Configure(ctx context.Context, req resource.Configu
 	r.dynamicClient = dClient
 }
 
-func (r *ValsSecretResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan ValsSecretResourceModel
+func (r *DbSecretResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan DbSecretResourceModel
 
 	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -192,8 +192,8 @@ func (r *ValsSecretResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
-	log.Printf("[DEBUG] Creating a ValsSecret for %v/%v", plan.Name.ValueString(), plan.Namespace.ValueString())
-	_, err := CreateValsSecret(ctx, r.dynamicClient, plan)
+	log.Printf("[DEBUG] Creating a DbSecret for %v/%v", plan.Name.ValueString(), plan.Namespace.ValueString())
+	_, err := CreateDbSecret(ctx, r.dynamicClient, plan)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Apply failed",
@@ -211,16 +211,16 @@ func (r *ValsSecretResource) Create(ctx context.Context, req resource.CreateRequ
 	}
 }
 
-func (r *ValsSecretResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+func (r *DbSecretResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	// Retrieve values from plan
-	var state ValsSecretResourceModel
+	var state DbSecretResourceModel
 	diags := req.State.Get(ctx, &state)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	s, err := GetValsSecret(ctx, r.dynamicClient, state.Name.ValueString(), state.Namespace.ValueString())
+	s, err := GetDbSecret(ctx, r.dynamicClient, state.Name.ValueString(), state.Namespace.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Read Secret",
@@ -229,7 +229,7 @@ func (r *ValsSecretResource) Read(ctx context.Context, req resource.ReadRequest,
 
 		return
 	}
-	tflog.Debug(ctx, fmt.Sprintf("[DEBUG] found a kubernetes valssecret in namespace %s with the name %s ", s.GetNamespace(), s.Spec.Name))
+	tflog.Debug(ctx, fmt.Sprintf("[DEBUG] found a kubernetes DbSecret in namespace %s with the name %s ", s.GetNamespace(), s.Name))
 
 	// Write logs using the tflog package
 	// Documentation: https://terraform.io/plugin/log
@@ -237,7 +237,6 @@ func (r *ValsSecretResource) Read(ctx context.Context, req resource.ReadRequest,
 
 	state.Name = types.StringValue(s.GetName())
 	state.Namespace = types.StringValue(s.GetNamespace())
-	state.Ttl = types.Int64Value(s.Spec.TTL)
 
 	// Set refreshed state
 	diags = resp.State.Set(ctx, &state)
@@ -251,8 +250,8 @@ func (r *ValsSecretResource) Read(ctx context.Context, req resource.ReadRequest,
 	}
 }
 
-func (r *ValsSecretResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan ValsSecretResourceModel
+func (r *DbSecretResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan DbSecretResourceModel
 
 	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -261,9 +260,9 @@ func (r *ValsSecretResource) Update(ctx context.Context, req resource.UpdateRequ
 		return
 	}
 
-	log.Printf("[DEBUG] Updating a ValsSecret for %v/%v", plan.Name.ValueString(), plan.Namespace.ValueString())
+	log.Printf("[DEBUG] Updating a DbSecret for %v/%v", plan.Name.ValueString(), plan.Namespace.ValueString())
 
-	_, err := CreateValsSecret(ctx, r.dynamicClient, plan)
+	_, err := CreateDbSecret(ctx, r.dynamicClient, plan)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Apply failed",
@@ -279,14 +278,14 @@ func (r *ValsSecretResource) Update(ctx context.Context, req resource.UpdateRequ
 	if resp.Diagnostics.HasError() {
 		resp.Diagnostics.AddError(
 			"Update error",
-			fmt.Sprintf("Error updating valssecret: %v", err),
+			fmt.Sprintf("Error updating DbSecret: %v", err),
 		)
 		return
 	}
 }
 
-func (r *ValsSecretResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var data ValsSecretResourceModel
+func (r *DbSecretResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var data DbSecretResourceModel
 
 	// Read Terraform prior state data into the model
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
@@ -299,15 +298,15 @@ func (r *ValsSecretResource) Delete(ctx context.Context, req resource.DeleteRequ
 		return
 	}
 
-	err := DeleteValsSecret(ctx, r.dynamicClient, data.Name.ValueString(), data.Namespace.ValueString())
+	err := DeleteDbSecret(ctx, r.dynamicClient, data.Name.ValueString(), data.Namespace.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Delete error",
-			fmt.Sprintf("Error deleting valssecret: %v", err),
+			fmt.Sprintf("Error deleting DbSecret: %v", err),
 		)
 	}
 }
 
-func (r *ValsSecretResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+func (r *DbSecretResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }

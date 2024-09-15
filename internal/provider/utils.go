@@ -156,3 +156,114 @@ func printDebug(msg ...any) {
 		log.Println(msg)
 	}
 }
+
+/* DB secrets */
+
+func GetDbSecret(ctx context.Context, client dynamic.Interface, secretName string, namespace string) (*DbSecret, error) {
+	var dbsecret *DbSecret
+	// Define the GVR (Group-Version-Resource) for the custom resource
+	gvr := k8sschema.GroupVersionResource{
+		Group:    "digitalis.io",
+		Version:  "v1beta1",
+		Resource: "dbsecrets",
+	}
+
+	obj, err := client.Resource(gvr).Namespace(namespace).Get(ctx, secretName, metav1.GetOptions{})
+	if err != nil {
+		return dbsecret, err
+	}
+
+	err = runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), &dbsecret)
+	if err != nil {
+		return dbsecret, err
+	}
+
+	return dbsecret, nil
+}
+
+func CreateDbSecret(ctx context.Context, client dynamic.Interface, plan DbSecretResourceModel) (*DbSecret, error) {
+	// Define the GVR (Group-Version-Resource) for the custom resource
+	gvr := k8sschema.GroupVersionResource{
+		Group:    "digitalis.io",
+		Version:  "v1beta1",
+		Resource: "dbsecrets",
+	}
+	gkr := k8sschema.GroupVersionKind{
+		Group:   "digitalis.io",
+		Version: "v1beta1",
+		Kind:    "DbSecret",
+	}
+
+	templates := make(map[string]string)
+	for _, r := range plan.Template {
+		templates[r.Name] = r.Value
+	}
+	rollouts := make([]map[string]interface{}, 0, len(plan.Rollout))
+	for _, r := range plan.Rollout {
+		rollouts = append(rollouts, map[string]interface{}{
+			"name": r.Name,
+			"kind": r.Kind,
+		})
+	}
+
+	obj := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "digitalis.io/v1beta1",
+			"kind":       "DbSecret",
+			"metadata": map[string]interface{}{
+				"name":      plan.Name.ValueString(),
+				"namespace": plan.Namespace.ValueString(),
+			},
+			"spec": map[string]interface{}{
+				"vault": map[string]interface{}{
+					"role":  plan.VaultRole.ValueString(),
+					"mount": plan.VaultMount.ValueString(),
+				},
+				"template": templates,
+				"rollout":  rollouts,
+			},
+		},
+	}
+
+	log.Println(prettyPrint(obj.UnstructuredContent()))
+
+	obj.SetGroupVersionKind(gkr)
+	var dbsecret *DbSecret
+	var err error
+
+	dbsecret, err = GetDbSecret(ctx, client, plan.Name.ValueString(), plan.Namespace.ValueString())
+	printDebug("[DEBUG] GetDbSecret error", err)
+	if err != nil && !errors.IsNotFound(err) {
+		return dbsecret, err
+	}
+
+	if dbsecret == nil || dbsecret.GetName() == "" {
+		printDebug("[DEBUG] CreateDbSecret, creating new secret", plan.Name.ValueString(), plan.Namespace.ValueString())
+		out, err := client.Resource(gvr).Namespace(plan.Namespace.ValueString()).Create(ctx, obj, metav1.CreateOptions{})
+		if err != nil {
+			return dbsecret, err
+		}
+		log.Println(prettyPrint(out.UnstructuredContent()))
+	} else {
+		printDebug("[DEBUG] CreateDbSecret Update secret", plan.Name.ValueString(), plan.Namespace.ValueString())
+		obj.SetResourceVersion(dbsecret.GetResourceVersion())
+		_, err = client.Resource(gvr).Namespace(plan.Namespace.ValueString()).Update(ctx, obj, metav1.UpdateOptions{})
+		if err != nil {
+			return dbsecret, err
+		}
+	}
+	err = runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), &dbsecret)
+	if err != nil {
+		return dbsecret, err
+	}
+	return dbsecret, nil
+}
+
+func DeleteDbSecret(ctx context.Context, client dynamic.Interface, secretName string, namespace string) error {
+	gvr := k8sschema.GroupVersionResource{
+		Group:    "digitalis.io",
+		Version:  "v1beta1",
+		Resource: "dbsecrets",
+	}
+	return client.Resource(gvr).Namespace(namespace).Delete(ctx, secretName, metav1.DeleteOptions{})
+}
