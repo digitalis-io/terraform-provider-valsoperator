@@ -153,6 +153,6 @@ func prettyPrint(obj map[string]interface{}) string {
 
 func printDebug(msg ...any) {
 	if logging.IsDebugOrHigher() {
-		log.Println(msg)
+		log.Println(msg...)
 	}
 }

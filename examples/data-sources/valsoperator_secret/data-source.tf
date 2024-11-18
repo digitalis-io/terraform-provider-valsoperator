@@ -20,4 +20,3 @@ data "valsoperator_secret" "example_secret" {
 output "example_secret" {
   value = data.valsoperator_secret.example_secret
 }
-
