@@ -7,6 +7,9 @@ on:
   push:
     tags:
       - 'v*'
+defaults:
+  run:
+    shell: bash
 
 # Releases need permissions to read and write the repository contents.
 # GitHub considers creating releases and uploading assets as writing contents.
@@ -33,6 +36,11 @@ jobs:
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.PASSPHRASE }}
+
+      - name: List keys
+        run: |
+          gpg -K
+          ps wwwaux | grep gpg
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@286f3b13b1b49da4ac219696163fb8c1c93e1200 # v6.0.0
