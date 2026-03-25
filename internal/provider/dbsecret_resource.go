@@ -64,13 +64,13 @@ type DbSecretTemplateModel struct {
 
 // DbSecretResourceModel describes the resource data model.
 type DbSecretResourceModel struct {
-	Name       types.String          `tfsdk:"name"`
-	Namespace  types.String          `tfsdk:"namespace"`
-	SecretName types.String          `tfsdk:"secret_name"`
-	Vault      []DbSecretVaultModel  `tfsdk:"vault"`
+	Name       types.String            `tfsdk:"name"`
+	Namespace  types.String            `tfsdk:"namespace"`
+	SecretName types.String            `tfsdk:"secret_name"`
+	Vault      []DbSecretVaultModel    `tfsdk:"vault"`
 	Template   []DbSecretTemplateModel `tfsdk:"template"`
-	Rollout    []DbSecretRolloutModel `tfsdk:"rollout"`
-	Renew      types.Bool            `tfsdk:"renew"`
+	Rollout    []DbSecretRolloutModel  `tfsdk:"rollout"`
+	Renew      types.Bool              `tfsdk:"renew"`
 }
 
 func (r *DbSecretResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
