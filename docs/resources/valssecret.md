@@ -50,10 +50,20 @@ END
 
 ### Optional
 
+- `rollout` (Block List) List of Deployments or StatefulSets to rollout restart when the secret changes (see [below for nested schema](#nestedblock--rollout))
 - `secret_ref` (Block List) (see [below for nested schema](#nestedblock--secret_ref))
 - `template` (Block List) (see [below for nested schema](#nestedblock--template))
 - `ttl` (Number) Vals secret ttl
 - `type` (String) Secret data type (default Opaque)
+
+<a id="nestedblock--rollout"></a>
+### Nested Schema for `rollout`
+
+Required:
+
+- `kind` (String) Kind of the resource: Deployment or StatefulSet
+- `name` (String) Name of the Deployment or StatefulSet
+
 
 <a id="nestedblock--secret_ref"></a>
 ### Nested Schema for `secret_ref`

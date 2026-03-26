@@ -59,12 +59,18 @@ type ValsSecretTemplate struct {
 	Value string `tfsdk:"value"`
 }
 
+type ValsSecretRollout struct {
+	Kind string `tfsdk:"kind"`
+	Name string `tfsdk:"name"`
+}
+
 // ValsSecretResourceModel describes the resource data model.
 type ValsSecretResourceModel struct {
 	Name      types.String          `tfsdk:"name"`
 	Namespace types.String          `tfsdk:"namespace"`
 	SecretRef []ValsSecretReference `tfsdk:"secret_ref"`
 	Template  []ValsSecretTemplate  `tfsdk:"template"`
+	Rollout   []ValsSecretRollout   `tfsdk:"rollout"`
 	Type      types.String          `tfsdk:"type"`
 	Ttl       types.Int64           `tfsdk:"ttl"`
 }
@@ -102,6 +108,21 @@ func (r *ValsSecretResource) Schema(ctx context.Context, req resource.SchemaRequ
 						},
 						"value": schema.StringAttribute{
 							Required: true,
+						},
+					},
+				},
+			},
+			"rollout": schema.ListNestedBlock{
+				MarkdownDescription: "List of Deployments or StatefulSets to rollout restart when the secret changes",
+				NestedObject: schema.NestedBlockObject{
+					Attributes: map[string]schema.Attribute{
+						"kind": schema.StringAttribute{
+							MarkdownDescription: "Kind of the resource: Deployment or StatefulSet",
+							Required:            true,
+						},
+						"name": schema.StringAttribute{
+							MarkdownDescription: "Name of the Deployment or StatefulSet",
+							Required:            true,
 						},
 					},
 				},

@@ -59,6 +59,14 @@ type Database struct {
 	Hosts []string `json:"hosts"`
 }
 
+// RolloutTarget sets up what deployment or sts to restart
+type RolloutTarget struct {
+	// Kind is either Deployment, Pod or StatefulSet
+	Kind string `json:"kind"`
+	// Name is the object name
+	Name string `json:"name"`
+}
+
 // ValsSecretSpec defines the desired state of ValsSecret
 type ValsSecretSpec struct {
 	Name      string                `json:"name,omitempty"`
@@ -67,6 +75,7 @@ type ValsSecretSpec struct {
 	Type      string                `json:"type,omitempty"`
 	Databases []Database            `json:"databases,omitempty"`
 	Template  map[string]string     `json:"template,omitempty"`
+	Rollout   []RolloutTarget       `json:"rollout,omitempty"`
 }
 
 // ValsSecretStatus defines the observed state of ValsSecret
@@ -80,4 +89,35 @@ type ValsSecret struct {
 
 	Spec   ValsSecretSpec   `json:"spec,omitempty"`
 	Status ValsSecretStatus `json:"status,omitempty"`
+}
+
+// DbVaultConfig defines the Vault connection settings
+type DbVaultConfig struct {
+	// Role is the vault role used to connect to the database
+	Role string `json:"role"`
+	// Mount is the vault database
+	Mount string `json:"mount"`
+}
+
+// DbSecretSpec defines the desired state of DbSecret
+type DbSecretSpec struct {
+	// SecretName can override the secret name, defaults to metadata.name
+	SecretName string            `json:"secretName,omitempty"`
+	Vault      DbVaultConfig     `json:"vault"`
+	Template   map[string]string `json:"template,omitempty"`
+	Renew      bool              `json:"renew,omitempty"`
+	Rollout    []RolloutTarget   `json:"rollout,omitempty"`
+}
+
+// DbSecretStatus defines the observed state of DbSecret
+type DbSecretStatus struct {
+}
+
+// DbSecret is the Schema for the dbsecrets API
+type DbSecret struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   DbSecretSpec   `json:"spec,omitempty"`
+	Status DbSecretStatus `json:"status,omitempty"`
 }
