@@ -19,7 +19,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -160,34 +159,30 @@ func (r *ValsSecretResource) Configure(ctx context.Context, req resource.Configu
 		return
 	}
 
-	client, err := req.ProviderData.(*kubeClientsets).MainClientset()
-
-	if err != nil {
+	clients, ok := req.ProviderData.(*kubeClientsets)
+	if !ok {
 		resp.Diagnostics.AddError(
-			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected *provider.KubeClientsets., got: %T. Please report this issue to the provider developers.", req.ProviderData),
+			"Unexpected Resource Configure Type",
+			fmt.Sprintf("Expected *kubeClientsets, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
-
 		return
 	}
 
-	restClient, err := req.ProviderData.(*kubeClientsets).RestClientConfig()
+	client, err := clients.MainClientset()
 	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected *restclient.Config., got: %T. Please report this issue to the provider developers.", req.ProviderData),
-		)
-
+		resp.Diagnostics.AddError("Kubernetes client error", err.Error())
 		return
 	}
 
-	dClient, err := req.ProviderData.(*kubeClientsets).DynamicClient()
+	restClient, err := clients.RestClientConfig()
 	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected dynamic.Interface., got: %T. Please report this issue to the provider developers.", req.ProviderData),
-		)
+		resp.Diagnostics.AddError("Kubernetes client error", err.Error())
+		return
+	}
 
+	dClient, err := clients.DynamicClient()
+	if err != nil {
+		resp.Diagnostics.AddError("Kubernetes client error", err.Error())
 		return
 	}
 
@@ -206,7 +201,7 @@ func (r *ValsSecretResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
-	tflog.Debug(ctx, fmt.Sprintf("[DEBUG] Creating a ValsSecret for %s/%s", plan.Namespace.ValueString(), plan.Name.ValueString()))
+	tflog.Debug(ctx, fmt.Sprintf("Creating a ValsSecret for %s/%s", plan.Namespace.ValueString(), plan.Name.ValueString()))
 	_, err := CreateValsSecret(ctx, r.dynamicClient, plan)
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -249,7 +244,7 @@ func (r *ValsSecretResource) Read(ctx context.Context, req resource.ReadRequest,
 
 		return
 	}
-	tflog.Debug(ctx, fmt.Sprintf("[DEBUG] found a kubernetes valssecret in namespace %s with the name %s", s.GetNamespace(), s.GetName()))
+	tflog.Debug(ctx, fmt.Sprintf("found a kubernetes valssecret in namespace %s with the name %s", s.GetNamespace(), s.GetName()))
 
 	state.Name = types.StringValue(s.GetName())
 	state.Namespace = types.StringValue(s.GetNamespace())
@@ -288,7 +283,7 @@ func (r *ValsSecretResource) Update(ctx context.Context, req resource.UpdateRequ
 		return
 	}
 
-	tflog.Debug(ctx, fmt.Sprintf("[DEBUG] Updating a ValsSecret for %s/%s", plan.Namespace.ValueString(), plan.Name.ValueString()))
+	tflog.Debug(ctx, fmt.Sprintf("Updating a ValsSecret for %s/%s", plan.Namespace.ValueString(), plan.Name.ValueString()))
 
 	_, err := UpdateValsSecret(ctx, r.dynamicClient, plan)
 	if err != nil {
@@ -326,12 +321,9 @@ func (r *ValsSecretResource) Delete(ctx context.Context, req resource.DeleteRequ
 
 // ImportState imports an existing ValsSecret using a "namespace/name" identifier.
 func (r *ValsSecretResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	namespace, name, ok := strings.Cut(req.ID, "/")
-	if !ok || namespace == "" || name == "" {
-		resp.Diagnostics.AddError(
-			"Invalid import ID",
-			fmt.Sprintf("Expected import identifier in the form \"namespace/name\", got: %q", req.ID),
-		)
+	namespace, name, err := splitNamespacedName(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", err.Error())
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("namespace"), namespace)...)

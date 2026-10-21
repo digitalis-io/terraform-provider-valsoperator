@@ -133,34 +133,30 @@ func (d *ValsSecretDataSource) Configure(ctx context.Context, req datasource.Con
 		return
 	}
 
-	client, err := req.ProviderData.(*kubeClientsets).MainClientset()
-
-	if err != nil {
+	clients, ok := req.ProviderData.(*kubeClientsets)
+	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected *provider.KubeClientsets., got: %T. Please report this issue to the provider developers.", req.ProviderData),
+			fmt.Sprintf("Expected *kubeClientsets, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
-
 		return
 	}
 
-	restClient, err := req.ProviderData.(*kubeClientsets).RestClientConfig()
+	client, err := clients.MainClientset()
 	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected *restclient.Config., got: %T. Please report this issue to the provider developers.", req.ProviderData),
-		)
-
+		resp.Diagnostics.AddError("Kubernetes client error", err.Error())
 		return
 	}
 
-	dClient, err := req.ProviderData.(*kubeClientsets).DynamicClient()
+	restClient, err := clients.RestClientConfig()
 	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected dynamic.Interface., got: %T. Please report this issue to the provider developers.", req.ProviderData),
-		)
+		resp.Diagnostics.AddError("Kubernetes client error", err.Error())
+		return
+	}
 
+	dClient, err := clients.DynamicClient()
+	if err != nil {
+		resp.Diagnostics.AddError("Kubernetes client error", err.Error())
 		return
 	}
 

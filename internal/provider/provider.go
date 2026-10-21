@@ -297,13 +297,15 @@ func (k *kubeClientsets) MainClientset() (*kubernetes.Clientset, error) {
 		return k.mainClientset, nil
 	}
 
-	if k.config != nil {
-		kc, err := kubernetes.NewForConfig(k.config)
-		if err != nil {
-			return nil, fmt.Errorf("failed to configure client: %s", err)
-		}
-		k.mainClientset = kc
+	if k.config == nil {
+		return nil, fmt.Errorf("no Kubernetes client configuration available")
 	}
+
+	kc, err := kubernetes.NewForConfig(k.config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to configure client: %w", err)
+	}
+	k.mainClientset = kc
 	return k.mainClientset, nil
 }
 
@@ -319,13 +321,15 @@ func (k *kubeClientsets) DynamicClient() (dynamic.Interface, error) {
 		return k.dynamicClient, nil
 	}
 
-	if k.config != nil {
-		kc, err := dynamic.NewForConfig(k.config)
-		if err != nil {
-			return nil, fmt.Errorf("failed to configure dynamic client: %s", err)
-		}
-		k.dynamicClient = kc
+	if k.config == nil {
+		return nil, fmt.Errorf("no Kubernetes client configuration available")
 	}
+
+	kc, err := dynamic.NewForConfig(k.config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to configure dynamic client: %w", err)
+	}
+	k.dynamicClient = kc
 	return k.dynamicClient, nil
 }
 

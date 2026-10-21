@@ -18,10 +18,10 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/logging"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -68,7 +68,7 @@ func valsSecretObject(plan ValsSecretResourceModel) *unstructured.Unstructured {
 		}
 	}
 
-	templates := make(map[string]string)
+	templates := make(map[string]interface{})
 	for _, r := range plan.Template {
 		templates[r.Name] = r.Value
 	}
@@ -111,21 +111,15 @@ func CreateValsSecret(ctx context.Context, client dynamic.Interface, plan ValsSe
 	name := plan.Name.ValueString()
 	namespace := plan.Namespace.ValueString()
 
-	existing, err := GetValsSecret(ctx, client, name, namespace)
-	if err != nil && !errors.IsNotFound(err) {
-		return nil, err
-	}
-	if existing != nil && existing.GetName() != "" {
+	obj := valsSecretObject(plan)
+	printDebug("creating valssecret", namespace, name)
+	out, err := client.Resource(valsSecretGVR).Namespace(namespace).Create(ctx, obj, metav1.CreateOptions{})
+	if errors.IsAlreadyExists(err) {
 		return nil, fmt.Errorf("valssecret %q already exists in namespace %q; import it with `terraform import` instead of creating it", name, namespace)
 	}
-
-	obj := valsSecretObject(plan)
-	printDebug("[DEBUG] CreateValsSecret, creating new secret", name, namespace)
-	out, err := client.Resource(valsSecretGVR).Namespace(namespace).Create(ctx, obj, metav1.CreateOptions{})
 	if err != nil {
 		return nil, err
 	}
-	printDebug(prettyPrint(out.UnstructuredContent()))
 
 	var secret ValsSecret
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(out.UnstructuredContent(), &secret); err != nil {
@@ -150,12 +144,11 @@ func UpdateValsSecret(ctx context.Context, client dynamic.Interface, plan ValsSe
 	obj.SetLabels(current.GetLabels())
 	obj.SetAnnotations(current.GetAnnotations())
 
-	printDebug("[DEBUG] UpdateValsSecret", name, namespace)
+	printDebug("updating valssecret", namespace, name)
 	out, err := client.Resource(valsSecretGVR).Namespace(namespace).Update(ctx, obj, metav1.UpdateOptions{})
 	if err != nil {
 		return nil, err
 	}
-	printDebug(prettyPrint(out.UnstructuredContent()))
 
 	var secret ValsSecret
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(out.UnstructuredContent(), &secret); err != nil {
@@ -211,7 +204,7 @@ func dbSecretObject(plan DbSecretResourceModel) (*unstructured.Unstructured, err
 	}
 
 	if len(plan.Template) > 0 {
-		templates := make(map[string]string)
+		templates := make(map[string]interface{})
 		for _, r := range plan.Template {
 			templates[r.Name] = r.Value
 		}
@@ -253,20 +246,14 @@ func CreateDbSecret(ctx context.Context, client dynamic.Interface, plan DbSecret
 		return nil, err
 	}
 
-	existing, err := GetDbSecret(ctx, client, name, namespace)
-	if err != nil && !errors.IsNotFound(err) {
-		return nil, err
-	}
-	if existing != nil && existing.GetName() != "" {
+	printDebug("creating dbsecret", namespace, name)
+	out, err := client.Resource(dbSecretGVR).Namespace(namespace).Create(ctx, obj, metav1.CreateOptions{})
+	if errors.IsAlreadyExists(err) {
 		return nil, fmt.Errorf("dbsecret %q already exists in namespace %q; import it with `terraform import` instead of creating it", name, namespace)
 	}
-
-	printDebug("[DEBUG] CreateDbSecret, creating new dbsecret", name, namespace)
-	out, err := client.Resource(dbSecretGVR).Namespace(namespace).Create(ctx, obj, metav1.CreateOptions{})
 	if err != nil {
 		return nil, err
 	}
-	printDebug(prettyPrint(out.UnstructuredContent()))
 
 	var secret DbSecret
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(out.UnstructuredContent(), &secret); err != nil {
@@ -293,12 +280,11 @@ func UpdateDbSecret(ctx context.Context, client dynamic.Interface, plan DbSecret
 	obj.SetLabels(current.GetLabels())
 	obj.SetAnnotations(current.GetAnnotations())
 
-	printDebug("[DEBUG] UpdateDbSecret", name, namespace)
+	printDebug("updating dbsecret", namespace, name)
 	out, err := client.Resource(dbSecretGVR).Namespace(namespace).Update(ctx, obj, metav1.UpdateOptions{})
 	if err != nil {
 		return nil, err
 	}
-	printDebug(prettyPrint(out.UnstructuredContent()))
 
 	var secret DbSecret
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(out.UnstructuredContent(), &secret); err != nil {
@@ -404,13 +390,13 @@ func refreshDbTemplates(prior []DbSecretTemplateModel, tmpl map[string]string) [
 	return result
 }
 
-func prettyPrint(obj map[string]interface{}) string {
-	b, err := json.MarshalIndent(obj, "", "  ")
-	if err != nil {
-		fmt.Println("error:", err)
-		return fmt.Sprintf("%v", err)
+// splitNamespacedName parses a "namespace/name" import identifier.
+func splitNamespacedName(id string) (namespace, name string, err error) {
+	namespace, name, ok := strings.Cut(id, "/")
+	if !ok || namespace == "" || name == "" {
+		return "", "", fmt.Errorf("expected import identifier in the form %q, got: %q", "namespace/name", id)
 	}
-	return string(b)
+	return namespace, name, nil
 }
 
 func printDebug(msg ...any) {
