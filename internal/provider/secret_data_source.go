@@ -18,6 +18,8 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -71,12 +73,14 @@ func (d *SecretDataSource) Schema(ctx context.Context, req datasource.SchemaRequ
 				Required:            true,
 			},
 			"data": schema.StringAttribute{
-				MarkdownDescription: "Secret data",
+				MarkdownDescription: "Secret data as a JSON object of decoded string values",
 				Computed:            true,
+				Sensitive:           true,
 			},
 			"binary_data": schema.StringAttribute{
-				MarkdownDescription: "Secret data in base64",
+				MarkdownDescription: "Secret data as a JSON object of base64-encoded values",
 				Computed:            true,
+				Sensitive:           true,
 			},
 			"type": schema.StringAttribute{
 				MarkdownDescription: "Secret data type (default Opaque)",
@@ -137,15 +141,33 @@ func (d *SecretDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 		return
 	}
 
-	// Write logs using the tflog package
-	// Documentation: https://terraform.io/plugin/log
 	tflog.Trace(ctx, "reading secret from kubernetes")
 
-	// For the purposes of this Secret code, hardcoding a response value to
-	// save into the Terraform state.
 	data.Name = types.StringValue(s.GetName())
 	data.Namespace = types.StringValue(s.GetNamespace())
 	data.Type = types.StringValue(string(s.Type))
+
+	// s.Data holds the decoded bytes. Expose them both as decoded strings and
+	// as base64 so callers can handle text and binary secrets.
+	decoded := make(map[string]string, len(s.Data))
+	encoded := make(map[string]string, len(s.Data))
+	for k, v := range s.Data {
+		decoded[k] = string(v)
+		encoded[k] = base64.StdEncoding.EncodeToString(v)
+	}
+
+	decodedJSON, err := json.Marshal(decoded)
+	if err != nil {
+		resp.Diagnostics.AddError("Secret encode error", fmt.Sprintf("Error encoding secret data: %v", err))
+		return
+	}
+	encodedJSON, err := json.Marshal(encoded)
+	if err != nil {
+		resp.Diagnostics.AddError("Secret encode error", fmt.Sprintf("Error encoding secret data: %v", err))
+		return
+	}
+	data.Data = types.StringValue(string(decodedJSON))
+	data.BinaryData = types.StringValue(string(encodedJSON))
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)

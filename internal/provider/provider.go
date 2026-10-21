@@ -24,8 +24,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 
-	gversion "github.com/hashicorp/go-version"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
@@ -34,14 +34,12 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/logging"
 	"github.com/mitchellh/go-homedir"
 	apimachineryschema "k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
-	aggregator "k8s.io/kube-aggregator/pkg/client/clientset_generated/clientset"
 )
 
 // Ensure ValsOperatorProvider satisfies various provider interfaces.
@@ -225,22 +223,23 @@ func (p *ValsOperatorProvider) Configure(ctx context.Context, req provider.Confi
 		}
 	}
 
-	ignoreAnnotations := []string{}
-	ignoreLabels := []string{}
+	var ignoreAnnotations []string
+	var ignoreLabels []string
 
-	for _, x := range data.IgnoreAnnotations.Elements() {
-		ignoreAnnotations = append(ignoreAnnotations, x.String())
+	if !data.IgnoreAnnotations.IsNull() {
+		resp.Diagnostics.Append(data.IgnoreAnnotations.ElementsAs(ctx, &ignoreAnnotations, false)...)
 	}
-	for _, x := range data.IgnoreLabels.Elements() {
-		ignoreAnnotations = append(ignoreAnnotations, x.String())
+	if !data.IgnoreLabels.IsNull() {
+		resp.Diagnostics.Append(data.IgnoreLabels.ElementsAs(ctx, &ignoreLabels, false)...)
+	}
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
 	m := &kubeClientsets{
-		config:              cfg,
-		mainClientset:       nil,
-		aggregatorClientset: nil,
-		IgnoreAnnotations:   ignoreAnnotations,
-		IgnoreLabels:        ignoreLabels,
+		config:            cfg,
+		IgnoreAnnotations: ignoreAnnotations,
+		IgnoreLabels:      ignoreLabels,
 	}
 
 	log.Printf("[DEBUG] the config file is %s", cfg.Host)
@@ -276,26 +275,24 @@ func New(version string) func() provider.Provider {
 
 type KubeClientsets interface {
 	MainClientset() (*kubernetes.Clientset, error)
-	AggregatorClientset() (*aggregator.Clientset, error)
 	DynamicClient() (dynamic.Interface, error)
-	DiscoveryClient() (discovery.DiscoveryInterface, error)
 	RestClientConfig() (*restclient.Config, error)
 }
 
 type kubeClientsets struct {
-	// TODO: this struct has become overloaded we should
-	// rename this or break it into smaller structs
-	config              *restclient.Config
-	mainClientset       *kubernetes.Clientset
-	aggregatorClientset *aggregator.Clientset
-	dynamicClient       dynamic.Interface
-	discoveryClient     discovery.DiscoveryInterface
+	mu            sync.Mutex
+	config        *restclient.Config
+	mainClientset *kubernetes.Clientset
+	dynamicClient dynamic.Interface
 
 	IgnoreAnnotations []string
 	IgnoreLabels      []string
 }
 
-func (k kubeClientsets) MainClientset() (*kubernetes.Clientset, error) {
+func (k *kubeClientsets) MainClientset() (*kubernetes.Clientset, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
 	if k.mainClientset != nil {
 		return k.mainClientset, nil
 	}
@@ -303,32 +300,21 @@ func (k kubeClientsets) MainClientset() (*kubernetes.Clientset, error) {
 	if k.config != nil {
 		kc, err := kubernetes.NewForConfig(k.config)
 		if err != nil {
-			return nil, fmt.Errorf("Failed to configure client: %s", err)
+			return nil, fmt.Errorf("failed to configure client: %s", err)
 		}
 		k.mainClientset = kc
 	}
 	return k.mainClientset, nil
 }
 
-func (k kubeClientsets) RestClientConfig() (*restclient.Config, error) {
+func (k *kubeClientsets) RestClientConfig() (*restclient.Config, error) {
 	return k.config, nil
 }
 
-func (k kubeClientsets) AggregatorClientset() (*aggregator.Clientset, error) {
-	if k.aggregatorClientset != nil {
-		return k.aggregatorClientset, nil
-	}
-	if k.config != nil {
-		ac, err := aggregator.NewForConfig(k.config)
-		if err != nil {
-			return nil, fmt.Errorf("Failed to configure client: %s", err)
-		}
-		k.aggregatorClientset = ac
-	}
-	return k.aggregatorClientset, nil
-}
+func (k *kubeClientsets) DynamicClient() (dynamic.Interface, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
 
-func (k kubeClientsets) DynamicClient() (dynamic.Interface, error) {
 	if k.dynamicClient != nil {
 		return k.dynamicClient, nil
 	}
@@ -336,26 +322,11 @@ func (k kubeClientsets) DynamicClient() (dynamic.Interface, error) {
 	if k.config != nil {
 		kc, err := dynamic.NewForConfig(k.config)
 		if err != nil {
-			return nil, fmt.Errorf("Failed to configure dynamic client: %s", err)
+			return nil, fmt.Errorf("failed to configure dynamic client: %s", err)
 		}
 		k.dynamicClient = kc
 	}
 	return k.dynamicClient, nil
-}
-
-func (k kubeClientsets) DiscoveryClient() (discovery.DiscoveryInterface, error) {
-	if k.discoveryClient != nil {
-		return k.discoveryClient, nil
-	}
-
-	if k.config != nil {
-		kc, err := discovery.NewDiscoveryClientForConfig(k.config)
-		if err != nil {
-			return nil, fmt.Errorf("Failed to configure discovery client: %s", err)
-		}
-		k.discoveryClient = kc
-	}
-	return k.discoveryClient, nil
 }
 
 func initializeConfiguration(ctx context.Context, d ValsOperatorProviderModel) (*restclient.Config, error) {
@@ -493,40 +464,4 @@ func initializeConfiguration(ctx context.Context, d ValsOperatorProviderModel) (
 	}
 
 	return cfg, nil
-}
-
-func getServerVersion(connection *kubernetes.Clientset) (*gversion.Version, error) {
-	sv, err := connection.ServerVersion()
-	if err != nil {
-		return nil, err
-	}
-
-	return gversion.NewVersion(sv.String())
-}
-
-func serverVersionGreaterThanOrEqual(connection *kubernetes.Clientset, version string) (bool, error) {
-	sv, err := getServerVersion(connection)
-	if err != nil {
-		return false, err
-	}
-	// server version that we need to compare with
-	cv, err := gversion.NewVersion(version)
-	if err != nil {
-		return false, err
-	}
-
-	return sv.GreaterThanOrEqual(cv), nil
-}
-
-func expandStringSlice(s []interface{}) []string {
-	result := make([]string, len(s))
-	for k, v := range s {
-		// Handle the Terraform parser bug which turns empty strings in lists to nil.
-		if v == nil {
-			result[k] = ""
-		} else {
-			result[k] = v.(string)
-		}
-	}
-	return result
 }

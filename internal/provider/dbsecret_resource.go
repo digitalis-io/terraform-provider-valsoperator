@@ -19,7 +19,7 @@ package provider
 import (
 	"context"
 	"fmt"
-	"log"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -27,6 +27,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
@@ -194,7 +195,7 @@ func (r *DbSecretResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
-	log.Printf("[DEBUG] Creating a DbSecret for %v/%v", plan.Name.ValueString(), plan.Namespace.ValueString())
+	tflog.Debug(ctx, fmt.Sprintf("[DEBUG] Creating a DbSecret for %s/%s", plan.Namespace.ValueString(), plan.Name.ValueString()))
 	_, err := CreateDbSecret(ctx, r.dynamicClient, plan)
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -218,6 +219,10 @@ func (r *DbSecretResource) Read(ctx context.Context, req resource.ReadRequest, r
 
 	s, err := GetDbSecret(ctx, r.dynamicClient, state.Name.ValueString(), state.Namespace.ValueString())
 	if err != nil {
+		if errors.IsNotFound(err) {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Read DbSecret",
 			fmt.Sprintf("Error getting DbSecret from Kubernetes: %v", err),
@@ -225,13 +230,28 @@ func (r *DbSecretResource) Read(ctx context.Context, req resource.ReadRequest, r
 		return
 	}
 	tflog.Debug(ctx, fmt.Sprintf("[DEBUG] found a kubernetes dbsecret in namespace %s with the name %s", s.GetNamespace(), s.GetName()))
-	tflog.Trace(ctx, "reading dbsecret from kubernetes")
 
 	state.Name = types.StringValue(s.GetName())
 	state.Namespace = types.StringValue(s.GetNamespace())
 	state.Renew = types.BoolValue(s.Spec.Renew)
 	if s.Spec.SecretName != "" {
 		state.SecretName = types.StringValue(s.Spec.SecretName)
+	}
+
+	// Refresh nested blocks from the live object so drift is detected.
+	state.Vault = []DbSecretVaultModel{{
+		Role:  s.Spec.Vault.Role,
+		Mount: s.Spec.Vault.Mount,
+	}}
+
+	state.Template = refreshDbTemplates(state.Template, s.Spec.Template)
+
+	state.Rollout = nil
+	for _, ro := range s.Spec.Rollout {
+		state.Rollout = append(state.Rollout, DbSecretRolloutModel{
+			Kind: ro.Kind,
+			Name: ro.Name,
+		})
 	}
 
 	diags = resp.State.Set(ctx, &state)
@@ -246,9 +266,9 @@ func (r *DbSecretResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
-	log.Printf("[DEBUG] Updating a DbSecret for %v/%v", plan.Name.ValueString(), plan.Namespace.ValueString())
+	tflog.Debug(ctx, fmt.Sprintf("[DEBUG] Updating a DbSecret for %s/%s", plan.Namespace.ValueString(), plan.Name.ValueString()))
 
-	_, err := CreateDbSecret(ctx, r.dynamicClient, plan)
+	_, err := UpdateDbSecret(ctx, r.dynamicClient, plan)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Apply failed",
@@ -270,7 +290,7 @@ func (r *DbSecretResource) Delete(ctx context.Context, req resource.DeleteReques
 	}
 
 	err := DeleteDbSecret(ctx, r.dynamicClient, data.Name.ValueString(), data.Namespace.ValueString())
-	if err != nil {
+	if err != nil && !errors.IsNotFound(err) {
 		resp.Diagnostics.AddError(
 			"Delete error",
 			fmt.Sprintf("Error deleting dbsecret: %v", err),
@@ -278,6 +298,16 @@ func (r *DbSecretResource) Delete(ctx context.Context, req resource.DeleteReques
 	}
 }
 
+// ImportState imports an existing DbSecret using a "namespace/name" identifier.
 func (r *DbSecretResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	namespace, name, ok := strings.Cut(req.ID, "/")
+	if !ok || namespace == "" || name == "" {
+		resp.Diagnostics.AddError(
+			"Invalid import ID",
+			fmt.Sprintf("Expected import identifier in the form \"namespace/name\", got: %q", req.ID),
+		)
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("namespace"), namespace)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), name)...)
 }
