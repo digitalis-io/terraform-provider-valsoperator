@@ -4,10 +4,10 @@
 
 ### Breaking
 
-- `valsoperator_valssecret` data source: the `ttl` attribute is now read-only
-  (computed) and the `template` block field `key` has been renamed to `name` to
-  match the resource. Configurations that set `ttl` or read `template[*].key`
-  on this data source must be updated.
+- `valsoperator_valssecret` data source: the `ttl` attribute and the `data`
+  nested attributes are now read-only (computed), and the `template` block
+  field `key` has been renamed to `name` to match the resource. Configurations
+  that set `ttl` or read `template[*].key` on this data source must be updated.
 
 ### Added
 
