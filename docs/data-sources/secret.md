@@ -47,6 +47,6 @@ output "example_secret" {
 
 ### Read-Only
 
-- `binary_data` (String) Secret data in base64
-- `data` (String) Secret data
+- `binary_data` (String, Sensitive) Secret data as a JSON object of base64-encoded values
+- `data` (String, Sensitive) Secret data as a JSON object of decoded string values
 - `type` (String) Secret data type (default Opaque)

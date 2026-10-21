@@ -3,12 +3,12 @@
 page_title: "valsoperator_valssecret Data Source - valsoperator"
 subcategory: ""
 description: |-
-  Vals Opetator secret data source
+  Vals Operator secret data source
 ---
 
 # valsoperator_valssecret (Data Source)
 
-Vals Opetator secret data source
+Vals Operator secret data source
 
 ## Example Usage
 
@@ -45,33 +45,27 @@ output "example" {
 - `name` (String) Vals secret name
 - `namespace` (String) Vals secret namespace
 
-### Optional
-
-- `ttl` (Number) Vals secret ttl (default is 3600 seconds)
-
 ### Read-Only
 
 - `data` (Attributes List) Secret data objects (see [below for nested schema](#nestedatt--data))
 - `template` (Attributes List) Secret template data (see [below for nested schema](#nestedatt--template))
+- `ttl` (Number) Vals secret ttl (default is 3600 seconds)
 - `type` (String) Secret data type (default Opaque)
 
 <a id="nestedatt--data"></a>
 ### Nested Schema for `data`
 
-Required:
-
-- `key` (String)
-- `ref` (String)
-
-Optional:
+Read-Only:
 
 - `encoding` (String)
+- `key` (String)
+- `ref` (String)
 
 
 <a id="nestedatt--template"></a>
 ### Nested Schema for `template`
 
-Required:
+Read-Only:
 
-- `key` (String)
+- `name` (String)
 - `value` (String)

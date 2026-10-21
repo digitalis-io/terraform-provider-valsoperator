@@ -19,7 +19,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -28,6 +27,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
@@ -82,7 +82,7 @@ func (r *ValsSecretResource) Metadata(ctx context.Context, req resource.Metadata
 func (r *ValsSecretResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		// This description is used by the documentation generator and the language server.
-		MarkdownDescription: "Vals Opetator secret data source",
+		MarkdownDescription: "Vals Operator secret resource",
 
 		Blocks: map[string]schema.Block{
 			"secret_ref": schema.ListNestedBlock{
@@ -159,34 +159,30 @@ func (r *ValsSecretResource) Configure(ctx context.Context, req resource.Configu
 		return
 	}
 
-	client, err := req.ProviderData.(*kubeClientsets).MainClientset()
-
-	if err != nil {
+	clients, ok := req.ProviderData.(*kubeClientsets)
+	if !ok {
 		resp.Diagnostics.AddError(
-			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected *provider.KubeClientsets., got: %T. Please report this issue to the provider developers.", req.ProviderData),
+			"Unexpected Resource Configure Type",
+			fmt.Sprintf("Expected *kubeClientsets, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
-
 		return
 	}
 
-	restClient, err := req.ProviderData.(*kubeClientsets).RestClientConfig()
+	client, err := clients.MainClientset()
 	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected *restclient.Config., got: %T. Please report this issue to the provider developers.", req.ProviderData),
-		)
-
+		resp.Diagnostics.AddError("Kubernetes client error", err.Error())
 		return
 	}
 
-	dClient, err := req.ProviderData.(*kubeClientsets).DynamicClient()
+	restClient, err := clients.RestClientConfig()
 	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected dynamic.Interface., got: %T. Please report this issue to the provider developers.", req.ProviderData),
-		)
+		resp.Diagnostics.AddError("Kubernetes client error", err.Error())
+		return
+	}
 
+	dClient, err := clients.DynamicClient()
+	if err != nil {
+		resp.Diagnostics.AddError("Kubernetes client error", err.Error())
 		return
 	}
 
@@ -205,7 +201,7 @@ func (r *ValsSecretResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
-	log.Printf("[DEBUG] Creating a ValsSecret for %v/%v", plan.Name.ValueString(), plan.Namespace.ValueString())
+	tflog.Debug(ctx, fmt.Sprintf("Creating a ValsSecret for %s/%s", plan.Namespace.ValueString(), plan.Name.ValueString()))
 	_, err := CreateValsSecret(ctx, r.dynamicClient, plan)
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -235,6 +231,12 @@ func (r *ValsSecretResource) Read(ctx context.Context, req resource.ReadRequest,
 
 	s, err := GetValsSecret(ctx, r.dynamicClient, state.Name.ValueString(), state.Namespace.ValueString())
 	if err != nil {
+		if errors.IsNotFound(err) {
+			// The resource was deleted outside Terraform; drop it from state
+			// so it is planned for recreation.
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Read Secret",
 			fmt.Sprintf("Error getting secret from Kubernetes: %v", err),
@@ -242,46 +244,33 @@ func (r *ValsSecretResource) Read(ctx context.Context, req resource.ReadRequest,
 
 		return
 	}
-	tflog.Debug(ctx, fmt.Sprintf("[DEBUG] found a kubernetes valssecret in namespace %s with the name %s ", s.GetNamespace(), s.Spec.Name))
-
-	// Write logs using the tflog package
-	// Documentation: https://terraform.io/plugin/log
-	tflog.Trace(ctx, "reading secret from kubernetes")
+	tflog.Debug(ctx, fmt.Sprintf("found a kubernetes valssecret in namespace %s with the name %s", s.GetNamespace(), s.GetName()))
 
 	state.Name = types.StringValue(s.GetName())
 	state.Namespace = types.StringValue(s.GetNamespace())
 	state.Ttl = types.Int64Value(s.Spec.TTL)
+	if s.Spec.Type != "" {
+		state.Type = types.StringValue(s.Spec.Type)
+	}
 
-	// FIXME: I need to compare old vs new
+	// Refresh the nested blocks from the live object so drift is detected.
+	// Maps have no stable order, so reconcile against the order already in
+	// state to avoid a perpetual diff: keep existing entries that still exist
+	// (with refreshed values), then append any new keys in sorted order.
+	state.SecretRef = refreshSecretRefs(state.SecretRef, s.Spec.Data)
+	state.Template = refreshTemplates(state.Template, s.Spec.Template)
 
-	// for dataEntry := range s.Spec.Data {
-	// 	entry := ValsSecretReference{
-	// 		Name:     dataEntry,
-	// 		Ref:      s.Spec.Data[dataEntry].Ref,
-	// 		Encoding: s.Spec.Data[dataEntry].Encoding,
-	// 	}
-	// 	tflog.Debug(ctx, fmt.Sprintf("[DEBUG] --->> %s with ref %s <<---", dataEntry, s.Spec.Data[dataEntry].Ref))
-	// 	state.SecretRef = append(state.SecretRef, entry)
-	// }
-
-	// for k, v := range s.Spec.Template {
-	// 	entry := TfTemplateSource{
-	// 		Key:   types.StringValue(k),
-	// 		Value: types.StringValue(v),
-	// 	}
-	// 	state.Template = append(state.Template, entry)
-	// }
+	state.Rollout = nil
+	for _, ro := range s.Spec.Rollout {
+		state.Rollout = append(state.Rollout, ValsSecretRollout{
+			Kind: ro.Kind,
+			Name: ro.Name,
+		})
+	}
 
 	// Set refreshed state
 	diags = resp.State.Set(ctx, &state)
 	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
-		resp.Diagnostics.AddError(
-			"Planning error",
-			fmt.Sprintf("Error updating terraform plan: %v", err),
-		)
-		return
-	}
 }
 
 func (r *ValsSecretResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -294,9 +283,9 @@ func (r *ValsSecretResource) Update(ctx context.Context, req resource.UpdateRequ
 		return
 	}
 
-	log.Printf("[DEBUG] Updating a ValsSecret for %v/%v", plan.Name.ValueString(), plan.Namespace.ValueString())
+	tflog.Debug(ctx, fmt.Sprintf("Updating a ValsSecret for %s/%s", plan.Namespace.ValueString(), plan.Name.ValueString()))
 
-	_, err := CreateValsSecret(ctx, r.dynamicClient, plan)
+	_, err := UpdateValsSecret(ctx, r.dynamicClient, plan)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Apply failed",
@@ -309,13 +298,6 @@ func (r *ValsSecretResource) Update(ctx context.Context, req resource.UpdateRequ
 	// Set state to fully populated data
 	diags := resp.State.Set(ctx, plan)
 	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
-		resp.Diagnostics.AddError(
-			"Update error",
-			fmt.Sprintf("Error updating valssecret: %v", err),
-		)
-		return
-	}
 }
 
 func (r *ValsSecretResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -325,15 +307,11 @@ func (r *ValsSecretResource) Delete(ctx context.Context, req resource.DeleteRequ
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 
 	if resp.Diagnostics.HasError() {
-		resp.Diagnostics.AddError(
-			"Delete error",
-			fmt.Sprintf("Error loading the the state file"),
-		)
 		return
 	}
 
 	err := DeleteValsSecret(ctx, r.dynamicClient, data.Name.ValueString(), data.Namespace.ValueString())
-	if err != nil {
+	if err != nil && !errors.IsNotFound(err) {
 		resp.Diagnostics.AddError(
 			"Delete error",
 			fmt.Sprintf("Error deleting valssecret: %v", err),
@@ -341,6 +319,13 @@ func (r *ValsSecretResource) Delete(ctx context.Context, req resource.DeleteRequ
 	}
 }
 
+// ImportState imports an existing ValsSecret using a "namespace/name" identifier.
 func (r *ValsSecretResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	namespace, name, err := splitNamespacedName(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", err.Error())
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("namespace"), namespace)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), name)...)
 }

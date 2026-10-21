@@ -73,7 +73,7 @@ func (d *ValsSecretDataSource) Metadata(ctx context.Context, req datasource.Meta
 func (d *ValsSecretDataSource) Schema(ctx context.Context, req datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		// This description is used by the documentation generator and the language server.
-		MarkdownDescription: "Vals Opetator secret data source",
+		MarkdownDescription: "Vals Operator secret data source",
 
 		Attributes: map[string]schema.Attribute{
 			"name": schema.StringAttribute{
@@ -86,7 +86,7 @@ func (d *ValsSecretDataSource) Schema(ctx context.Context, req datasource.Schema
 			},
 			"ttl": schema.Int64Attribute{
 				MarkdownDescription: "Vals secret ttl (default is 3600 seconds)",
-				Optional:            true,
+				Computed:            true,
 			},
 			"data": schema.ListNestedAttribute{
 				MarkdownDescription: "Secret data objects",
@@ -94,16 +94,13 @@ func (d *ValsSecretDataSource) Schema(ctx context.Context, req datasource.Schema
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"key": schema.StringAttribute{
-							Required: true,
-							Computed: false,
+							Computed: true,
 						},
 						"ref": schema.StringAttribute{
-							Required: true,
-							Computed: false,
+							Computed: true,
 						},
 						"encoding": schema.StringAttribute{
-							Required: false,
-							Optional: true,
+							Computed: true,
 						},
 					},
 				},
@@ -113,13 +110,11 @@ func (d *ValsSecretDataSource) Schema(ctx context.Context, req datasource.Schema
 				Computed:            true,
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
-						"key": schema.StringAttribute{
-							Required: true,
-							Computed: false,
+						"name": schema.StringAttribute{
+							Computed: true,
 						},
 						"value": schema.StringAttribute{
-							Required: true,
-							Computed: false,
+							Computed: true,
 						},
 					},
 				},
@@ -138,34 +133,30 @@ func (d *ValsSecretDataSource) Configure(ctx context.Context, req datasource.Con
 		return
 	}
 
-	client, err := req.ProviderData.(*kubeClientsets).MainClientset()
-
-	if err != nil {
+	clients, ok := req.ProviderData.(*kubeClientsets)
+	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected *provider.KubeClientsets., got: %T. Please report this issue to the provider developers.", req.ProviderData),
+			fmt.Sprintf("Expected *kubeClientsets, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
-
 		return
 	}
 
-	restClient, err := req.ProviderData.(*kubeClientsets).RestClientConfig()
+	client, err := clients.MainClientset()
 	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected *restclient.Config., got: %T. Please report this issue to the provider developers.", req.ProviderData),
-		)
-
+		resp.Diagnostics.AddError("Kubernetes client error", err.Error())
 		return
 	}
 
-	dClient, err := req.ProviderData.(*kubeClientsets).DynamicClient()
+	restClient, err := clients.RestClientConfig()
 	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected dynamic.Interface., got: %T. Please report this issue to the provider developers.", req.ProviderData),
-		)
+		resp.Diagnostics.AddError("Kubernetes client error", err.Error())
+		return
+	}
 
+	dClient, err := clients.DynamicClient()
+	if err != nil {
+		resp.Diagnostics.AddError("Kubernetes client error", err.Error())
 		return
 	}
 
