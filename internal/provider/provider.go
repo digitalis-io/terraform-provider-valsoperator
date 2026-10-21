@@ -19,6 +19,7 @@ package provider
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -298,7 +299,7 @@ func (k *kubeClientsets) MainClientset() (*kubernetes.Clientset, error) {
 	}
 
 	if k.config == nil {
-		return nil, fmt.Errorf("no Kubernetes client configuration available")
+		return nil, errors.New("no Kubernetes client configuration available")
 	}
 
 	kc, err := kubernetes.NewForConfig(k.config)
@@ -322,7 +323,7 @@ func (k *kubeClientsets) DynamicClient() (dynamic.Interface, error) {
 	}
 
 	if k.config == nil {
-		return nil, fmt.Errorf("no Kubernetes client configuration available")
+		return nil, errors.New("no Kubernetes client configuration available")
 	}
 
 	kc, err := dynamic.NewForConfig(k.config)
