@@ -3,12 +3,12 @@
 page_title: "valsoperator_valssecret Resource - valsoperator"
 subcategory: ""
 description: |-
-  Vals Opetator secret data source
+  Vals Operator secret resource
 ---
 
 # valsoperator_valssecret (Resource)
 
-Vals Opetator secret data source
+Vals Operator secret resource
 
 ## Example Usage
 
@@ -85,3 +85,14 @@ Required:
 
 - `name` (String)
 - `value` (String)
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+# ValsSecret can be imported using "namespace/name"
+terraform import valsoperator_valssecret.example apps/db-creds
+```

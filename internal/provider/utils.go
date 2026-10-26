@@ -18,9 +18,10 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/logging"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -31,41 +32,34 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
-func GetValsSecret(ctx context.Context, client dynamic.Interface, secretName string, namespace string) (*ValsSecret, error) {
-	var secret *ValsSecret
-
-	// Define the GVR (Group-Version-Resource) for the custom resource
-	gvr := k8sschema.GroupVersionResource{
-		Group:    "digitalis.io",
-		Version:  "v1",
-		Resource: "valssecrets",
-	}
-
-	obj, err := client.Resource(gvr).Namespace(namespace).Get(ctx, secretName, metav1.GetOptions{})
-	if err != nil {
-		return secret, err
-	}
-
-	err = runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), &secret)
-	if err != nil {
-		return secret, err
-	}
-
-	return secret, nil
+var valsSecretGVR = k8sschema.GroupVersionResource{
+	Group:    "digitalis.io",
+	Version:  "v1",
+	Resource: "valssecrets",
 }
 
-func CreateValsSecret(ctx context.Context, client dynamic.Interface, plan ValsSecretResourceModel) (*ValsSecret, error) {
-	// Define the GVR (Group-Version-Resource) for the custom resource
-	gvr := k8sschema.GroupVersionResource{
-		Group:    "digitalis.io",
-		Version:  "v1",
-		Resource: "valssecrets",
+var valsSecretGVK = k8sschema.GroupVersionKind{
+	Group:   "digitalis.io",
+	Version: "v1",
+	Kind:    "ValsSecret",
+}
+
+func GetValsSecret(ctx context.Context, client dynamic.Interface, secretName string, namespace string) (*ValsSecret, error) {
+	obj, err := client.Resource(valsSecretGVR).Namespace(namespace).Get(ctx, secretName, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
 	}
-	gkr := k8sschema.GroupVersionKind{
-		Group:   "digitalis.io",
-		Version: "v1",
-		Kind:    "ValsSecret",
+
+	var secret ValsSecret
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), &secret); err != nil {
+		return nil, err
 	}
+
+	return &secret, nil
+}
+
+// valsSecretObject renders the desired ValsSecret as an unstructured object.
+func valsSecretObject(plan ValsSecretResourceModel) *unstructured.Unstructured {
 	refs := make(map[string]interface{})
 	for _, r := range plan.SecretRef {
 		refs[r.Name] = map[string]interface{}{
@@ -74,7 +68,7 @@ func CreateValsSecret(ctx context.Context, client dynamic.Interface, plan ValsSe
 		}
 	}
 
-	templates := make(map[string]string)
+	templates := make(map[string]interface{})
 	for _, r := range plan.Template {
 		templates[r.Name] = r.Value
 	}
@@ -109,41 +103,58 @@ func CreateValsSecret(ctx context.Context, client dynamic.Interface, plan ValsSe
 			"spec": spec,
 		},
 	}
+	obj.SetGroupVersionKind(valsSecretGVK)
+	return obj
+}
 
-	log.Println(prettyPrint(obj.UnstructuredContent()))
+func CreateValsSecret(ctx context.Context, client dynamic.Interface, plan ValsSecretResourceModel) (*ValsSecret, error) {
+	name := plan.Name.ValueString()
+	namespace := plan.Namespace.ValueString()
 
-	obj.SetGroupVersionKind(gkr)
-
-	var secret *ValsSecret
-	var err error
-
-	secret, err = GetValsSecret(ctx, client, plan.Name.ValueString(), plan.Namespace.ValueString())
-	printDebug("[DEBUG] GetValsSecret error", err)
-	if err != nil && !errors.IsNotFound(err) {
-		return secret, err
+	obj := valsSecretObject(plan)
+	printDebug("creating valssecret", namespace, name)
+	out, err := client.Resource(valsSecretGVR).Namespace(namespace).Create(ctx, obj, metav1.CreateOptions{})
+	if errors.IsAlreadyExists(err) {
+		return nil, fmt.Errorf("valssecret %q already exists in namespace %q; import it with `terraform import` instead of creating it", name, namespace)
 	}
-
-	if secret == nil || secret.GetName() == "" {
-		printDebug("[DEBUG] CreateValsSecret, creating new secret", plan.Name.ValueString(), plan.Namespace.ValueString())
-		out, err := client.Resource(gvr).Namespace(plan.Namespace.ValueString()).Create(ctx, obj, metav1.CreateOptions{})
-		if err != nil {
-			return secret, err
-		}
-		log.Println(prettyPrint(out.UnstructuredContent()))
-	} else {
-		printDebug("[DEBUG] Update secret", plan.Name.ValueString(), plan.Namespace.ValueString())
-		obj.SetResourceVersion(secret.GetResourceVersion())
-		_, err = client.Resource(gvr).Namespace(plan.Namespace.ValueString()).Update(ctx, obj, metav1.UpdateOptions{})
-		if err != nil {
-			return secret, err
-		}
-	}
-	err = runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), &secret)
 	if err != nil {
-		return secret, err
+		return nil, err
 	}
 
-	return secret, nil
+	var secret ValsSecret
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(out.UnstructuredContent(), &secret); err != nil {
+		return nil, err
+	}
+	return &secret, nil
+}
+
+func UpdateValsSecret(ctx context.Context, client dynamic.Interface, plan ValsSecretResourceModel) (*ValsSecret, error) {
+	name := plan.Name.ValueString()
+	namespace := plan.Namespace.ValueString()
+
+	current, err := client.Resource(valsSecretGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	obj := valsSecretObject(plan)
+	// Preserve the resource version and any metadata (labels/annotations)
+	// managed by other controllers so the update does not clobber them.
+	obj.SetResourceVersion(current.GetResourceVersion())
+	obj.SetLabels(current.GetLabels())
+	obj.SetAnnotations(current.GetAnnotations())
+
+	printDebug("updating valssecret", namespace, name)
+	out, err := client.Resource(valsSecretGVR).Namespace(namespace).Update(ctx, obj, metav1.UpdateOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	var secret ValsSecret
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(out.UnstructuredContent(), &secret); err != nil {
+		return nil, err
+	}
+	return &secret, nil
 }
 
 var dbSecretGVR = k8sschema.GroupVersionResource{
@@ -159,22 +170,21 @@ var dbSecretGVK = k8sschema.GroupVersionKind{
 }
 
 func GetDbSecret(ctx context.Context, client dynamic.Interface, name string, namespace string) (*DbSecret, error) {
-	var secret *DbSecret
-
 	obj, err := client.Resource(dbSecretGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		return secret, err
+		return nil, err
 	}
 
-	err = runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), &secret)
-	if err != nil {
-		return secret, err
+	var secret DbSecret
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), &secret); err != nil {
+		return nil, err
 	}
 
-	return secret, nil
+	return &secret, nil
 }
 
-func CreateDbSecret(ctx context.Context, client dynamic.Interface, plan DbSecretResourceModel) (*DbSecret, error) {
+// dbSecretObject renders the desired DbSecret as an unstructured object.
+func dbSecretObject(plan DbSecretResourceModel) (*unstructured.Unstructured, error) {
 	// Build vault config - required, take first block entry
 	if len(plan.Vault) == 0 {
 		return nil, fmt.Errorf("vault block is required")
@@ -194,7 +204,7 @@ func CreateDbSecret(ctx context.Context, client dynamic.Interface, plan DbSecret
 	}
 
 	if len(plan.Template) > 0 {
-		templates := make(map[string]string)
+		templates := make(map[string]interface{})
 		for _, r := range plan.Template {
 			templates[r.Name] = r.Value
 		}
@@ -223,41 +233,64 @@ func CreateDbSecret(ctx context.Context, client dynamic.Interface, plan DbSecret
 			"spec": spec,
 		},
 	}
-
-	log.Println(prettyPrint(obj.UnstructuredContent()))
 	obj.SetGroupVersionKind(dbSecretGVK)
+	return obj, nil
+}
 
-	var secret *DbSecret
-	var err error
+func CreateDbSecret(ctx context.Context, client dynamic.Interface, plan DbSecretResourceModel) (*DbSecret, error) {
+	name := plan.Name.ValueString()
+	namespace := plan.Namespace.ValueString()
 
-	secret, err = GetDbSecret(ctx, client, plan.Name.ValueString(), plan.Namespace.ValueString())
-	printDebug("[DEBUG] GetDbSecret error", err)
-	if err != nil && !errors.IsNotFound(err) {
-		return secret, err
-	}
-
-	if secret == nil || secret.GetName() == "" {
-		printDebug("[DEBUG] CreateDbSecret, creating new dbsecret", plan.Name.ValueString(), plan.Namespace.ValueString())
-		out, err := client.Resource(dbSecretGVR).Namespace(plan.Namespace.ValueString()).Create(ctx, obj, metav1.CreateOptions{})
-		if err != nil {
-			return secret, err
-		}
-		log.Println(prettyPrint(out.UnstructuredContent()))
-	} else {
-		printDebug("[DEBUG] Update dbsecret", plan.Name.ValueString(), plan.Namespace.ValueString())
-		obj.SetResourceVersion(secret.GetResourceVersion())
-		_, err = client.Resource(dbSecretGVR).Namespace(plan.Namespace.ValueString()).Update(ctx, obj, metav1.UpdateOptions{})
-		if err != nil {
-			return secret, err
-		}
-	}
-
-	err = runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), &secret)
+	obj, err := dbSecretObject(plan)
 	if err != nil {
-		return secret, err
+		return nil, err
 	}
 
-	return secret, nil
+	printDebug("creating dbsecret", namespace, name)
+	out, err := client.Resource(dbSecretGVR).Namespace(namespace).Create(ctx, obj, metav1.CreateOptions{})
+	if errors.IsAlreadyExists(err) {
+		return nil, fmt.Errorf("dbsecret %q already exists in namespace %q; import it with `terraform import` instead of creating it", name, namespace)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var secret DbSecret
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(out.UnstructuredContent(), &secret); err != nil {
+		return nil, err
+	}
+	return &secret, nil
+}
+
+func UpdateDbSecret(ctx context.Context, client dynamic.Interface, plan DbSecretResourceModel) (*DbSecret, error) {
+	name := plan.Name.ValueString()
+	namespace := plan.Namespace.ValueString()
+
+	obj, err := dbSecretObject(plan)
+	if err != nil {
+		return nil, err
+	}
+
+	current, err := client.Resource(dbSecretGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	// Preserve the resource version and metadata managed by other controllers.
+	obj.SetResourceVersion(current.GetResourceVersion())
+	obj.SetLabels(current.GetLabels())
+	obj.SetAnnotations(current.GetAnnotations())
+
+	printDebug("updating dbsecret", namespace, name)
+	out, err := client.Resource(dbSecretGVR).Namespace(namespace).Update(ctx, obj, metav1.UpdateOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	var secret DbSecret
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(out.UnstructuredContent(), &secret); err != nil {
+		return nil, err
+	}
+	return &secret, nil
 }
 
 func DeleteDbSecret(ctx context.Context, client dynamic.Interface, name string, namespace string) error {
@@ -273,13 +306,97 @@ func DeleteValsSecret(ctx context.Context, client dynamic.Interface, secretName 
 	return client.Resource(gvr).Namespace(namespace).Delete(ctx, secretName, metav1.DeleteOptions{})
 }
 
-func prettyPrint(obj map[string]interface{}) string {
-	b, err := json.MarshalIndent(obj, "", "  ")
-	if err != nil {
-		fmt.Println("error:", err)
-		return fmt.Sprintf("%v", err)
+// orderedKeys returns the keys of present ordered so that keys named in prior
+// keep their original position, followed by any new keys in sorted order. This
+// keeps map-backed nested blocks stable across reads and avoids perpetual diffs.
+func orderedKeys(prior []string, present map[string]bool) []string {
+	result := make([]string, 0, len(present))
+	seen := make(map[string]bool, len(prior))
+
+	for _, name := range prior {
+		if present[name] && !seen[name] {
+			seen[name] = true
+			result = append(result, name)
+		}
 	}
-	return string(b)
+
+	added := make([]string, 0)
+	for name := range present {
+		if !seen[name] {
+			added = append(added, name)
+		}
+	}
+	sort.Strings(added)
+	return append(result, added...)
+}
+
+func keyPresence[V any](m map[string]V) map[string]bool {
+	present := make(map[string]bool, len(m))
+	for k := range m {
+		present[k] = true
+	}
+	return present
+}
+
+func priorNames[T any](prior []T, name func(T) string) []string {
+	names := make([]string, len(prior))
+	for i, p := range prior {
+		names[i] = name(p)
+	}
+	return names
+}
+
+// refreshSecretRefs reconciles the secret_ref blocks in state against the live
+// data map, preserving existing order and appending new keys sorted.
+func refreshSecretRefs(prior []ValsSecretReference, data map[string]DataSource) []ValsSecretReference {
+	keys := orderedKeys(priorNames(prior, func(r ValsSecretReference) string { return r.Name }), keyPresence(data))
+	if len(keys) == 0 {
+		return nil
+	}
+	result := make([]ValsSecretReference, 0, len(keys))
+	for _, name := range keys {
+		result = append(result, ValsSecretReference{
+			Name:     name,
+			Ref:      data[name].Ref,
+			Encoding: data[name].Encoding,
+		})
+	}
+	return result
+}
+
+// refreshTemplates reconciles valssecret template blocks against the live map.
+func refreshTemplates(prior []ValsSecretTemplate, tmpl map[string]string) []ValsSecretTemplate {
+	keys := orderedKeys(priorNames(prior, func(t ValsSecretTemplate) string { return t.Name }), keyPresence(tmpl))
+	if len(keys) == 0 {
+		return nil
+	}
+	result := make([]ValsSecretTemplate, 0, len(keys))
+	for _, name := range keys {
+		result = append(result, ValsSecretTemplate{Name: name, Value: tmpl[name]})
+	}
+	return result
+}
+
+// refreshDbTemplates reconciles dbsecret template blocks against the live map.
+func refreshDbTemplates(prior []DbSecretTemplateModel, tmpl map[string]string) []DbSecretTemplateModel {
+	keys := orderedKeys(priorNames(prior, func(t DbSecretTemplateModel) string { return t.Name }), keyPresence(tmpl))
+	if len(keys) == 0 {
+		return nil
+	}
+	result := make([]DbSecretTemplateModel, 0, len(keys))
+	for _, name := range keys {
+		result = append(result, DbSecretTemplateModel{Name: name, Value: tmpl[name]})
+	}
+	return result
+}
+
+// splitNamespacedName parses a "namespace/name" import identifier.
+func splitNamespacedName(id string) (namespace, name string, err error) {
+	namespace, name, ok := strings.Cut(id, "/")
+	if !ok || namespace == "" || name == "" {
+		return "", "", fmt.Errorf("expected import identifier in the form %q, got: %q", "namespace/name", id)
+	}
+	return namespace, name, nil
 }
 
 func printDebug(msg ...any) {
