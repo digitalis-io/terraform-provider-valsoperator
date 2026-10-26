@@ -82,3 +82,14 @@ Required:
 
 - `mount` (String) Vault database mount path
 - `role` (String) Vault role used to connect to the database
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+# DbSecret can be imported using "namespace/name"
+terraform import valsoperator_dbsecret.example apps/db-creds
+```
